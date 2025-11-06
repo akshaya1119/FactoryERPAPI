@@ -537,13 +537,14 @@ public class QuantitySheetController : ControllerBase
             sheet.ProcessId.Clear();
             _processService.ProcessCatch(sheet);
             processedNewSheets.Add(sheet);
+            Console.WriteLine(sheet);
         }
 
         // Now handle inserting or updating the QuantitySheets based on ProjectId
         foreach (var newSheet in processedNewSheets)
         {
             var existingSheet = existingSheets
-                .FirstOrDefault(s => s.LotNo == newSheet.LotNo && s.ProjectId == newSheet.ProjectId && s.StopCatch == 0);
+                .FirstOrDefault(s => s.CatchNo == newSheet.CatchNo && s.LotNo == newSheet.LotNo && s.ProjectId == newSheet.ProjectId && s.StopCatch == 0);
 
             if (existingSheet != null)
             {
@@ -566,6 +567,7 @@ public class QuantitySheetController : ControllerBase
             {
                 // If no existing sheet found, add it to the context for insertion
                 _context.QuantitySheets.Add(newSheet);
+                Console.WriteLine($"Adding new sheet with CatchNo {newSheet.CatchNo}, ProjectId {newSheet.ProjectId}");
             }
         }
 
