@@ -49,6 +49,7 @@ public class QuantitySheetController : ControllerBase
             .Select(t => t.Types)
             .FirstOrDefaultAsync();
 
+
         if (projectType == "Booklet" && project.NoOfSeries.HasValue)
         {
             var noOfSeries = project.NoOfSeries.Value;
