@@ -645,6 +645,179 @@ namespace ERPAPI.Controllers
             }
         }
 
+        //Added this new api bulk
+
+        [HttpPost("Bulk")]
+        public async Task<IActionResult> CreateTransactions([FromBody] List<Transaction> transactions)
+        {
+            if (transactions == null || !transactions.Any())
+                return BadRequest("Invalid or empty transaction list.");
+
+            using var dbTransaction = await _context.Database.BeginTransactionAsync();
+
+            try
+            {
+                foreach (var transaction in transactions)
+                {
+                    // Validate process
+                    var process = await _context.Processes
+                        .FirstOrDefaultAsync(p => p.Id == transaction.ProcessId);
+
+                    if (process == null)
+                        return BadRequest("Invalid ProcessId.");
+
+                    var validProcessNames = new List<string>
+            {
+                "Digital Printing", "CTP", "Offset Printing", "Cutting"
+            };
+
+                    // ------------------------------------------------------------------
+                    // CASE 1: Process is DP / CTP / Offset / Cutting
+                    // ------------------------------------------------------------------
+                    if (validProcessNames.Contains(process.Name))
+                    {
+                        var existingTransaction = await _context.Transaction
+                            .FirstOrDefaultAsync(t =>
+                                t.QuantitysheetId == transaction.QuantitysheetId &&
+                                t.LotNo == transaction.LotNo &&
+                                t.ProcessId == transaction.ProcessId);
+
+                        if (existingTransaction != null)
+                        {
+                            var oldValues = existingTransaction.GetType().GetProperties()
+                                .ToDictionary(prop => prop.Name, prop =>
+                                    prop.Name == "TeamId"
+                                        ? string.Join(",", existingTransaction.TeamId ?? new List<int>())
+                                        : prop.GetValue(existingTransaction)?.ToString());
+
+                            // Update
+                            existingTransaction.InterimQuantity = transaction.InterimQuantity;
+                            existingTransaction.Remarks = transaction.Remarks;
+                            existingTransaction.ZoneId = transaction.ZoneId;
+                            existingTransaction.MachineId = transaction.MachineId;
+                            existingTransaction.Status = transaction.Status;
+                            existingTransaction.AlarmId = transaction.AlarmId;
+                            existingTransaction.TeamId = transaction.TeamId ?? new List<int>();
+                            existingTransaction.VoiceRecording = transaction.VoiceRecording;
+
+                            var newValues = existingTransaction.GetType().GetProperties()
+                                .ToDictionary(prop => prop.Name, prop =>
+                                    prop.Name == "TeamId"
+                                        ? string.Join(",", existingTransaction.TeamId ?? new List<int>())
+                                        : prop.GetValue(existingTransaction)?.ToString());
+
+                            _context.Transaction.Update(existingTransaction);
+
+                            // Logging
+                            foreach (var key in oldValues.Keys)
+                            {
+                                var oldValue = oldValues[key];
+                                var newValue = newValues[key];
+
+                                if (oldValue != newValue)
+                                {
+                                    _loggerService.LogEventWithTransaction(
+                                        $"{key} updated",
+                                        "Transaction",
+                                        User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
+                                        existingTransaction.TransactionId,
+                                        oldValue: oldValue,
+                                        newValue: newValue
+                                    );
+                                }
+                            }
+                        }
+                        else
+                        {
+                            // New entry
+                            transaction.TeamId = transaction.TeamId ?? new List<int>();
+                            _context.Transaction.Add(transaction);
+
+                            _loggerService.LogEventWithTransaction(
+                               "Transaction created",
+                               "Transaction",
+                               User.Identity?.Name != null ? int.Parse(User.Identity.Name) : 0,
+                               transaction.TransactionId,
+                               newValue: $"TeamId: {string.Join(",", transaction.TeamId)}, ZoneId: {transaction.ZoneId}, MachineId: {transaction.MachineId}"
+                            );
+                        }
+                    }
+                    // ------------------------------------------------------------------
+                    // CASE 2: OTher Processes (requires catch grouping logic)
+                    // ------------------------------------------------------------------
+                    else
+                    {
+                        var qs = await _context.QuantitySheets
+                            .FirstOrDefaultAsync(q => q.QuantitySheetId == transaction.QuantitysheetId);
+
+                        if (qs == null)
+                            return BadRequest("QuantitySheet not found.");
+
+                        var allSheets = await _context.QuantitySheets
+                            .Where(q =>
+                                q.CatchNo == qs.CatchNo &&
+                                q.LotNo == transaction.LotNo.ToString() &&
+                                q.ProjectId == transaction.ProjectId)
+                            .ToListAsync();
+
+                        foreach (var sheet in allSheets)
+                        {
+                            var existing = await _context.Transaction
+                                .FirstOrDefaultAsync(t =>
+                                    t.QuantitysheetId == sheet.QuantitySheetId &&
+                                    t.LotNo == transaction.LotNo &&
+                                    t.ProcessId == transaction.ProcessId);
+
+                            if (existing != null)
+                            {
+                                existing.InterimQuantity = transaction.InterimQuantity;
+                                existing.Remarks = transaction.Remarks;
+                                existing.ZoneId = transaction.ZoneId;
+                                existing.MachineId = transaction.MachineId;
+                                existing.Status = transaction.Status;
+                                existing.AlarmId = transaction.AlarmId;
+                                existing.TeamId = transaction.TeamId ?? new List<int>();
+                                existing.VoiceRecording = transaction.VoiceRecording;
+
+                                _context.Transaction.Update(existing);
+                            }
+                            else
+                            {
+                                var newTrans = new Transaction
+                                {
+                                    InterimQuantity = transaction.InterimQuantity,
+                                    Remarks = transaction.Remarks,
+                                    VoiceRecording = transaction.VoiceRecording,
+                                    ProjectId = transaction.ProjectId,
+                                    QuantitysheetId = sheet.QuantitySheetId,
+                                    ProcessId = transaction.ProcessId,
+                                    ZoneId = transaction.ZoneId,
+                                    MachineId = transaction.MachineId,
+                                    Status = transaction.Status,
+                                    AlarmId = transaction.AlarmId,
+                                    LotNo = transaction.LotNo,
+                                    TeamId = transaction.TeamId ?? new List<int>()
+                                };
+
+                                _context.Transaction.Add(newTrans);
+                            }
+                        }
+                    }
+                }
+
+                // Save all at once
+                await _context.SaveChangesAsync();
+                await dbTransaction.CommitAsync();
+
+                return Ok(new { message = "Transactions created/updated successfully." });
+            }
+            catch (Exception ex)
+            {
+                await dbTransaction.RollbackAsync();
+                return StatusCode(500, ex.Message);
+            }
+        }
+
 
 
 
